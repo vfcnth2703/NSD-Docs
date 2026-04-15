@@ -2,9 +2,7 @@
 
 # ============================================
 # SMB HealthCheck - Автоматический установщик
-# С выбором ресурсов для мониторинга
-# Пароль SMTP вшит в конфиг
-# Исправлена проверка монтирования для WSL2
+# Для ресурсов: records, Synology, fserver, ftp
 # ============================================
 
 set -e
@@ -23,7 +21,7 @@ LOG_DIR="$INSTALL_DIR/logs"
 BIN_DIR="$INSTALL_DIR/bin"
 ETC_DIR="$INSTALL_DIR/etc"
 
-# Пароль SMTP (вшит в инсталлятор)
+# Пароль SMTP
 SMTP_PASSWORD="FstG3#EMx"
 
 echo -e "${BLUE}============================================${NC}"
@@ -40,8 +38,9 @@ fi
 
 # Список всех возможных ресурсов
 AVAILABLE_RESOURCES=(
-    "fserver|/mnt/fserver|//192.168.150.192/files"
+    "records|/mnt/records|//192.168.13.175/records"
     "Synology|/mnt/Synology05/FTP|//Synology05/FTP"
+    "fserver|/mnt/fserver|//192.168.150.192/files"
     "ASCN_Volgograd|/mnt/ftp|//ftp/ftp/ascnvolgograd"
 )
 
@@ -58,8 +57,8 @@ for i in "${!AVAILABLE_RESOURCES[@]}"; do
 done
 
 echo -e "${YELLOW}Выберите ресурсы для мониторинга (через пробел)${NC}"
-echo "Пример: 1 2 3 - все ресурсы"
-echo "Пример: 1 2 - только fserver и Synology"
+echo "Пример: 1 2 3 4 - все ресурсы"
+echo "Пример: 1 2 3 - без ftp (для боевого сервера)"
 echo -e "${YELLOW}Если просто нажать Enter - будут выбраны все ресурсы${NC}"
 read -p "Ваш выбор: " SELECTION
 
@@ -98,60 +97,30 @@ echo ""
 echo -e "${GREEN}Начинаю установку...${NC}"
 echo ""
 
-# ОЧИСТКА FSTAB ОТ ДУБЛИКАТОВ
-echo -e "${BLUE}[1/7] Очистка /etc/fstab от дубликатов...${NC}"
-
-# Создаем резервную копию
-sudo cp /etc/fstab /etc/fstab.backup.$(date +%Y%m%d_%H%M%S)
-
-# Удаляем старые записи
-for item in "${AVAILABLE_RESOURCES[@]}"; do
-    IFS='|' read -r name mount remote <<< "$item"
-    sudo sed -i "\#${mount}#d" /etc/fstab 2>/dev/null || true
-done
-sudo sed -i '/# SMB ресурсы для выгрузки файлов/d' /etc/fstab
-
-# Добавляем выбранные ресурсы в fstab
-echo -e "${GREEN}Добавление записей в /etc/fstab...${NC}"
-
-# Добавляем заголовок
-echo -e "\n# SMB ресурсы для выгрузки файлов (добавлено SMB HealthCheck)" | sudo tee -a /etc/fstab
-
-for item in "${SELECTED_RESOURCES[@]}"; do
-    IFS='|' read -r name mount remote <<< "$item"
-    
-    # Определяем учетные данные для каждого ресурса
-    if [[ "$name" == "fserver" ]]; then
-        creds="domain=servplus.ru,username=Naumen,password=P!w^%DWh4e"
-    elif [[ "$name" == "Synology" ]]; then
-        creds="domain=servplus.ru,username=Naumen,password=P!w^%DWh4e"
-    elif [[ "$name" == "ASCN_Volgograd" ]]; then
-        creds="domain=servplus.ru,username=d.zezin,password=H&733jVu5"
-    fi
-    
-    echo "$remote  $mount  cifs  $creds,iocharset=utf8,file_mode=0777,dir_mode=0777 0 0" | sudo tee -a /etc/fstab
-done
-
-# Шаг 2: Создание структуры директорий
-echo -e "${BLUE}[2/7] Создание структуры директорий...${NC}"
+# Шаг 1: Создание структуры директорий
+echo -e "${BLUE}[1/6] Создание структуры директорий...${NC}"
 sudo mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$BIN_DIR" "$ETC_DIR"
 sudo chown -R $(whoami):$(whoami) "$INSTALL_DIR"
 
-# Шаг 3: Установка пакетов
-echo -e "${BLUE}[3/7] Установка необходимых пакетов...${NC}"
+# Шаг 2: Установка пакетов
+echo -e "${BLUE}[2/6] Установка необходимых пакетов...${NC}"
 sudo apt update -qq
 sudo apt install -y cifs-utils
 
-# Шаг 4: Создание точек монтирования
-echo -e "${BLUE}[4/7] Создание точек монтирования...${NC}"
+# Шаг 3: Создание точек монтирования
+echo -e "${BLUE}[3/6] Создание точек монтирования...${NC}"
 for item in "${SELECTED_RESOURCES[@]}"; do
     IFS='|' read -r name mount remote <<< "$item"
-    sudo mkdir -p "$mount"
-    echo "  Создана: $mount"
+    if [ ! -d "$mount" ]; then
+        sudo mkdir -p "$mount"
+        echo "  Создана: $mount"
+    else
+        echo "  Уже существует: $mount"
+    fi
 done
 
-# Шаг 5: Создание основного скрипта
-echo -e "${BLUE}[5/7] Создание скрипта мониторинга...${NC}"
+# Шаг 4: Создание основного скрипта
+echo -e "${BLUE}[4/6] Создание скрипта мониторинга...${NC}"
 
 # Формируем список MOUNT_POINTS для скрипта
 MOUNT_POINTS_LIST=""
@@ -168,17 +137,14 @@ INSTALL_DIR="/opt/smb-healthcheck"
 LOG_DIR="$INSTALL_DIR/logs"
 CONFIG_FILE="$INSTALL_DIR/etc/config.env"
 
-# Загрузка конфигурации
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
 
-# Список точек монтирования
 MOUNT_POINTS=(
 MOUNT_POINTS_PLACEHOLDER
 )
 
-# Настройки по умолчанию
 LOG_FILE="${LOG_FILE:-$LOG_DIR/healthcheck.log}"
 NOTIFY_TO="${NOTIFY_TO:-}"
 LAST_ERROR_FILE="$LOG_DIR/last_error"
@@ -187,28 +153,20 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# Специальная проверка монтирования для WSL2
 is_mounted() {
     local mount_point="$1"
     
-    # Проверка через /proc/mounts (наиболее надежно в WSL2)
     if grep -q " $mount_point " /proc/mounts 2>/dev/null; then
         return 0
     fi
-    
-    # Проверка через mount команду
     if mount | grep -q " $mount_point "; then
         return 0
     fi
-    
-    # Проверка: можем ли мы прочитать директорию
     if [ -d "$mount_point" ] && [ -r "$mount_point" ]; then
-        # Проверяем, что это не пустая директория (признак смонтированной шары)
         if ls -la "$mount_point" 2>/dev/null | grep -q "total 0\|^d"; then
             return 0
         fi
     fi
-    
     return 1
 }
 
@@ -282,7 +240,6 @@ check_all() {
     
     for item in "${MOUNT_POINTS[@]}"; do
         IFS='|' read -r name mount <<< "$item"
-        
         if is_mounted "$mount"; then
             log "✓ $name: OK"
             echo "✓ $name: OK"
@@ -325,10 +282,8 @@ show_status() {
         echo "$name: $mount"
         if is_mounted "$mount"; then
             echo "  ✓ ПРИМОНТИРОВАН"
-            # Пробуем получить реальный размер через df, но в WSL2 может не работать
             df_output=$(df -h "$mount" 2>/dev/null | tail -1)
             if echo "$df_output" | grep -q "^none"; then
-                # В WSL2 df показывает none, пробуем через mount
                 mount_info=$(mount | grep " $mount ")
                 if [ -n "$mount_info" ]; then
                     echo "  Смонтирован: $(echo $mount_info | awk '{print $1}')"
@@ -363,8 +318,8 @@ mv "$TMP_SCRIPT" "$BIN_DIR/smb_healthcheck.sh"
 
 chmod +x "$BIN_DIR/smb_healthcheck.sh"
 
-# Шаг 6: Создание скрипта отправки писем
-echo -e "${BLUE}[6/7] Создание скрипта отправки писем...${NC}"
+# Шаг 5: Создание скрипта отправки писем
+echo -e "${BLUE}[5/6] Создание скрипта отправки писем...${NC}"
 cat > "$BIN_DIR/send_alert.sh" << 'SENDALERT'
 #!/bin/bash
 
@@ -431,17 +386,15 @@ SENDALERT
 
 chmod +x "$BIN_DIR/send_alert.sh"
 
-# Шаг 7: Создание конфигурации
-echo -e "${BLUE}[7/7] Создание конфигурации...${NC}"
+# Шаг 6: Создание конфигурации
+echo -e "${BLUE}[6/6] Создание конфигурации...${NC}"
 
 cat > "$ETC_DIR/config.env" << CONFIG
 # SMB HealthCheck Configuration
 # Created: $(date)
 
-# Email для уведомлений (можно несколько через запятую)
 NOTIFY_TO="$NOTIFY_EMAIL"
 
-# SMTP настройки (пароль хранится здесь же)
 SMTP_HOST="smtp.lancloud.ru"
 SMTP_PORT="587"
 SMTP_USER="superset@ascn.ru"
