@@ -282,14 +282,10 @@ show_status() {
         echo "$name: $mount"
         if is_mounted "$mount"; then
             echo "  ✓ ПРИМОНТИРОВАН"
-            df_output=$(df -h "$mount" 2>/dev/null | tail -1)
-            if echo "$df_output" | grep -q "^none"; then
-                mount_info=$(mount | grep " $mount ")
-                if [ -n "$mount_info" ]; then
-                    echo "  Смонтирован: $(echo $mount_info | awk '{print $1}')"
-                fi
-            else
-                echo "$df_output" | awk '{print "  Размер: " $2 "\n  Использовано: " $3 "\n  Доступно: " $4}'
+            # Показываем удаленный ресурс вместо размера
+            mount_info=$(mount | grep " $mount " | head -1)
+            if [ -n "$mount_info" ]; then
+                echo "  Ресурс: $(echo $mount_info | awk '{print $1}')"
             fi
         else
             echo "  ✗ НЕ ПРИМОНТИРОВАН"
