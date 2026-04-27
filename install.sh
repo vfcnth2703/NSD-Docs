@@ -2,7 +2,7 @@
 
 # ============================================
 # SMB HealthCheck - Автоматический установщик
-# Для ресурсов: records, Synology, fserver, ftp
+# С исправленной проверкой монтирования
 # ============================================
 
 set -e
@@ -58,7 +58,6 @@ done
 
 echo -e "${YELLOW}Выберите ресурсы для мониторинга (через пробел)${NC}"
 echo "Пример: 1 2 3 4 - все ресурсы"
-echo "Пример: 1 2 3 - без ftp (для боевого сервера)"
 echo -e "${YELLOW}Если просто нажать Enter - будут выбраны все ресурсы${NC}"
 read -p "Ваш выбор: " SELECTION
 
@@ -104,7 +103,7 @@ sudo chown -R $(whoami):$(whoami) "$INSTALL_DIR"
 
 # Шаг 2: Установка пакетов
 echo -e "${BLUE}[2/6] Установка необходимых пакетов...${NC}"
-sudo apt update -qq
+sudo apt update -qq 2>/dev/null || true
 sudo apt install -y cifs-utils
 
 # Шаг 3: Создание точек монтирования
@@ -153,20 +152,33 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ ПРОВЕРКИ МОНТИРОВАНИЯ
 is_mounted() {
     local mount_point="$1"
     
+    # 1. Главная проверка через mountpoint (самая надежная)
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        return 0
+    fi
+    
+    # 2. Проверка через /proc/mounts
     if grep -q " $mount_point " /proc/mounts 2>/dev/null; then
         return 0
     fi
+    
+    # 3. Проверка через mount команду
     if mount | grep -q " $mount_point "; then
         return 0
     fi
-    if [ -d "$mount_point" ] && [ -r "$mount_point" ]; then
-        if ls -la "$mount_point" 2>/dev/null | grep -q "total 0\|^d"; then
+    
+    # 4. Дополнительная проверка через stat
+    if [ -d "$mount_point" ]; then
+        local fstype=$(stat -f -c %T "$mount_point" 2>/dev/null)
+        if [[ "$fstype" != "ext2/ext3" && "$fstype" != "ext4" && "$fstype" != "tmpfs" && "$fstype" != "none" ]]; then
             return 0
         fi
     fi
+    
     return 1
 }
 
@@ -282,7 +294,6 @@ show_status() {
         echo "$name: $mount"
         if is_mounted "$mount"; then
             echo "  ✓ ПРИМОНТИРОВАН"
-            # Показываем удаленный ресурс вместо размера
             mount_info=$(mount | grep " $mount " | head -1)
             if [ -n "$mount_info" ]; then
                 echo "  Ресурс: $(echo $mount_info | awk '{print $1}')"
@@ -418,7 +429,7 @@ $BIN_DIR/smb_healthcheck.sh mount > /dev/null 2>&1
 
 # Установка sendemail если нужны уведомления
 if [ -n "$NOTIFY_EMAIL" ]; then
-    sudo apt install -y sendemail
+    sudo apt install -y sendemail 2>/dev/null || true
 fi
 
 # Финальный вывод
